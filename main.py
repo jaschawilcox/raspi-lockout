@@ -90,23 +90,21 @@ class configuration():
          safeDict = copy.deepcopy(self._configDict)
       return safeDict
    
-   def setFile(self, file):
+   def setFile(self, content):
       with open('config.json','w') as f:
-         f.write(json.dumps(file))
-      self._configFile = file
+         f.write(json.dumps(content))
+      self._configFile = content
       with self._configLock:
          self._configDict = self.parseConfigFile(self._configFile)
       
-   def parseConfigFile(self, file):
+   def parseConfigFile(self, content):
       config = {'machine':{},'user':{}}
-   
-      machineConfig = file['machineConfig']
-      for r in machineConfig[1:]:
-         config['machine'][r[0]] = dict(zip(machineConfig[0][1:], r[1:]))
-      
-      userConfig = file['userConfig']
-      for r in userConfig[1:]:
-         config['user'][r[0]] = dict(zip(userConfig[0][1:], r[1:]))
+      configWorksheets = {'machine':'machineConfig','user':'userConfig'}
+
+      for c in config
+         worksheet = content[configWorksheets[c]]
+         for row in worksheet[1:]:
+            config[c][row[0]] = dict(zip(worksheet[0][1:], row[1:]))
       
       return config
 
@@ -207,7 +205,7 @@ def main():
    session = useSession(config)
 
    disp = display(session)
-   disp.setState('locked')
+   disp.setState(state)
    
    ssDaemon = threading.Thread(target=updateSpreadsheetWorker, args=(config,))
    ssDaemon.setDaemon(True)
@@ -272,5 +270,6 @@ def main():
       
       disp.update()
       sleep(1)
-      
-main()
+
+if __name__ == "__main__":
+   main()
