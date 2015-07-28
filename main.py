@@ -1,9 +1,9 @@
 #!/usr/bin/python
-###  _____ _            _____                 _                   _   
-### |_   _| |          /  __ \               | |                 | |  
-###   | | | |__   ___  | /  \/ ___  _ __  ___| |_ _ __ _   _  ___| |_ 
+###  _____ _            _____                 _                   _
+### |_   _| |          /  __ \               | |                 | |
+###   | | | |__   ___  | /  \/ ___  _ __  ___| |_ _ __ _   _  ___| |_
 ###   | | | '_ \ / _ \ | |    / _ \| '_ \/ __| __| '__| | | |/ __| __|
-###   | | | | | |  __/ | \__/\ (_) | | | \__ \ |_| |  | |_| | (__| |_ 
+###   | | | | | |  __/ | \__/\ (_) | | | \__ \ |_| |  | |_| | (__| |_
 ###   \_/ |_| |_|\___|  \____/\___/|_| |_|___/\__|_|   \__,_|\___|\__|
 ###
 ### Machine Lockout controller
@@ -25,11 +25,12 @@ from oauth2client.client import SignedJwtAssertionCredentials
 import lcddriver
 import RPi.GPIO as GPIO
 
-MYMAC = open('/sys/class/net/eth0/address').read()
-MACHINE = 'tormach'
+# Fetch this machine's wifi MAC address
+with open('/sys/class/net/wlan0/address') as f:
+    MYMAC = f.read()[:17]
 
 ESTOP_CHANNEL = 17
-RELAY_CHANNEL = 21
+RELAY_CHANNEL = 4
 
 def setMachineEnable(state = False):
    """Open and close the e-stop relay"""
@@ -48,19 +49,19 @@ def updateSpreadsheetWorker(config):
 
    scope = ['https://spreadsheets.google.com/feeds']
    credentials = SignedJwtAssertionCredentials(json_key['client_email'], json_key['private_key'], scope)
-   
+
    while True:
       try:
          # Login to google spreadsheets
          gs = gspread.authorize(credentials)
          configSpreadsheet = gs.open("config")
-         print "Opened spreadsheet."   
-         
+         print "Opened spreadsheet."
+
          try:
             # Open up worksheets and import lists
             userConfig = configSpreadsheet.worksheet('userConfig').get_all_values()
             machineConfig = configSpreadsheet.worksheet('machineConfig').get_all_values()
-            
+
             # Update file and local data
             config.setFile({'userConfig':userConfig, 'machineConfig':machineConfig})
 
@@ -79,44 +80,44 @@ class configuration():
       with open('config.json','r') as f:
          self._configFile = json.load(f)
       self._configDict = self.parseConfigFile(self._configFile)
-      
+
       # We need this to protect shared access to configDict
       self._configLock = threading.Lock()
-      
+
    def getDict(self):
       """Return dict of config spreadsheets"""
       # Is this copy necessary???
       with self._configLock:
          safeDict = copy.deepcopy(self._configDict)
       return safeDict
-   
+
    def setFile(self, content):
       with open('config.json','w') as f:
          f.write(json.dumps(content))
       self._configFile = content
       with self._configLock:
          self._configDict = self.parseConfigFile(self._configFile)
-      
+
    def parseConfigFile(self, content):
       config = {'machine':{},'user':{}}
       configWorksheets = {'machine':'machineConfig','user':'userConfig'}
 
-      for c in config
+      for c in config:
          worksheet = content[configWorksheets[c]]
          for row in worksheet[1:]:
             config[c][row[0]] = dict(zip(worksheet[0][1:], row[1:]))
-      
+
       return config
 
 class display():
    """Handles what gets displayed on the LCD"""
    def __init__(self, session):
       self._session = session
-      
+
       # Setup hardware
       self._lcd = lcddriver.lcd()
       self._lcd.lcd_clear()
-      
+
       self._state = 'locked'
 
       self._timestr = ''
@@ -125,14 +126,14 @@ class display():
 
    def setState(self, state):
       self._state = state
-      
-      if self._state == 'locked':      
+
+      if self._state == 'locked':
          self._lcd.lines = \
             ["*******LOCKED*******",
             "  Ready to swipe.   ",
             "",
             time.ctime()[:20]]
-      elif self._state == 'estop':      
+      elif self._state == 'estop':
          self._lcd.lines = \
             ["*******LOCKED*******",
             "E-Stop is depressed.",
@@ -147,7 +148,7 @@ class display():
             "Unlocked:  " + time.ctime(self._session.getTimeStart())[11:19] ,
             #"Remaining: " + time.ctime(self._session.getTimeEnd())[11:16] ]
             "Remaining: " + remaining ]
-      
+
    def showMessage(self, message, duration = 3):
       """Show a message string for duration seconds"""
       print message
@@ -155,10 +156,10 @@ class display():
       msgLines = re.findall('.{0,19}[ |.|!|?]',message)[:3]
       for i, l in enumerate(msgLines):
          self._lcd.lines[i] = l
-      
+
       # Display for some time
       self._messageTimeout = time.time() + duration
-      
+
    def update(self):
       if time.time() >= self._messageTimeout:
          self.setState(self._state)
@@ -167,20 +168,20 @@ class display():
 class useSession():
    def __init__(self, config):
       self._config = config
-      
+
       self._userName = ''
       self._timeStart = 0
       self._timeEnd = 0
-   
+
    def getTimeEnd(self):
       return self._timeStart + (float(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
-   
+
    def getTimeStart(self):
       return self._timeStart
-      
+
    def getUserName(self):
       return self._userName
-      
+
    def new(self, hash):
       self._userName = self._config.getDict()['user'][hash]['name']
       self._timeStart = time.time()
@@ -189,43 +190,52 @@ def main():
    # Setup hardware
    try:
       GPIO.setmode(GPIO.BCM)
-      
+
       # Estop on model B+ GPIO 17 (pin 11)
       GPIO.setup(ESTOP_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
       #GPIO.add_event_detect(ESTOP_CHANNEL, GPIO.FALLING)
-      
+
       # Relay on model B+ GPIO 21 (pin 40)
       GPIO.setup(RELAY_CHANNEL, GPIO.OUT, initial=GPIO.HIGH)
    except:
       print "Unable to setup GPIO. Need sudo?"
-   
+
    state = 'locked'
-   
+
    config = configuration()
    session = useSession(config)
 
    disp = display(session)
    disp.setState(state)
-   
+
    ssDaemon = threading.Thread(target=updateSpreadsheetWorker, args=(config,))
    ssDaemon.setDaemon(True)
    ssDaemon.start()
-   
+
+   disp.showMessage('Waiting for spreadsheet update.')
+   sleep(10)
+
+   try:
+       thisMachine = config.getDict()['machine'][MYMAC]['name']
+   except KeyError:
+      disp.showMessage('Unknown machine MAC.')
+      raise
+
    while(True):
       # Check if a card has been swiped
       if select.select([sys.stdin,],[],[],0.0)[0]:
          raw = sys.stdin.readline()
-      
+
          # Validate ID
          try:
             id = re.search('[0-9]+',raw).group(0)
             idhash = hashlib.sha256(id).hexdigest()
-            level = int(config.getDict()['user'][idhash][MACHINE])
+            level = int(config.getDict()['user'][idhash][thisMachine])
             print "Access level:", level
          except:
             disp.showMessage('Unknown ID.')
             continue
-            
+
          # Determine state change
          if state == 'estop':
             disp.showMessage("Estop is depressed!")
@@ -239,12 +249,12 @@ def main():
                state = 'unlocked'
                disp.setState(state)
                setMachineEnable(True)
-               
+
             elif state == 'unlocked':
                # Extend session
                session.new(idhash)
                disp.showMessage("Extending session.")
-      
+
       if not GPIO.input(ESTOP_CHANNEL):
          # Estop is depressed!
          if state != 'estop':
@@ -252,7 +262,7 @@ def main():
             disp.showMessage("EStop, Locking machine!")
             state = 'estop'
             disp.setState(state)
-            setMachineEnable(False)  
+            setMachineEnable(False)
       else:
          # Normal operation
          if state == 'estop':
@@ -266,8 +276,8 @@ def main():
                disp.showMessage("Timeout, Locking machine!")
                state = 'locked'
                disp.setState(state)
-               setMachineEnable(False)     
-      
+               setMachineEnable(False)
+
       disp.update()
       sleep(1)
 
