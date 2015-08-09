@@ -57,7 +57,7 @@ def initHardware():
     GPIO.setup(LED_CHANNEL_RED, GPIO.OUT, initial=GPIO.LOW)
     GPIO.setup(LED_CHANNEL_GREEN, GPIO.OUT, initial=GPIO.LOW)
 
-def spreadsheetWorker(config):
+def spreadsheetWorker(config, session):
     """Thread periodically updating the local config file from google sheets"""
     # These credentials can be obtained for your account at the google developer console
     with open('googleCredentials.json','r') as f:
@@ -71,21 +71,35 @@ def spreadsheetWorker(config):
             # Login to google spreadsheets
             gs = gspread.authorize(credentials)
             configSpreadsheet = gs.open("config")
-            print "Opened spreadsheet."
-
-            try:
-                # Open up worksheets and import lists
-                userConfig = configSpreadsheet.worksheet('userConfig').get_all_values()
-                machineConfig = configSpreadsheet.worksheet('machineConfig').get_all_values()
-
-                # Update file and local data
-                config.setFile({'userConfig':userConfig, 'machineConfig':machineConfig})
-
-                print "Successfully updated config.json"
-            except:
-                print "Something went wrong trying to update the config file..."
+            logSpreadsheet = gs.open("logs")
+            print "Opened spreadsheets."
         except:
             print "Can't get to spreadsheet, internet down?"
+
+        try:
+            # Open up worksheets and import lists
+            userConfig = configSpreadsheet.worksheet('userConfig').get_all_values()
+            machineConfig = configSpreadsheet.worksheet('machineConfig').get_all_values()
+
+            # Update file and local data
+            config.setFile({'userConfig':userConfig, 'machineConfig':machineConfig})
+
+            print "Successfully updated config.json"
+        except:
+            print "Something went wrong trying to update the config file..."
+
+        try:
+            thisMachine = config.getDict()['machine'][MYMAC]['name']
+            logWorksheet = logSpreadsheet.worksheet(thisMachine)
+
+            logs = session.getLogs()
+            if len(logs) > 0:
+                for r in logs:
+                    logWorksheet.insert_row(r, index = 2)
+                session.setLogs([])
+                print "Wrote logs to spreadsheet"
+        except:
+            print "Unable to write logs"
 
         # Update every so often
         sleep(600)
@@ -98,7 +112,7 @@ class Configuration():
         self._configDict = self.parseConfigFile(self._configFile)
 
         # We need this to protect shared access to configDict
-        self._configLock = threading.Lock()
+        self._configLock = threading.RLock()
 
     def getDict(self):
         """Return dict of config spreadsheets"""
@@ -189,8 +203,11 @@ class UseSession():
         self._timeStart = 0
         self._timeEnd = 0
 
+        self._log = []
+        self.lock = threading.RLock()
+
     def getTimeEnd(self):
-        return self._timeStart + (float(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
+        return self._timeEnd
 
     def getTimeStart(self):
         return self._timeStart
@@ -201,6 +218,23 @@ class UseSession():
     def new(self, hash):
         self._userName = self._config.getDict()['user'][hash]['name']
         self._timeStart = time.time()
+        self._timeEnd = self._timeStart + (int(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
+
+    def extend(self):
+        self._timeEnd = self._timeStart + (int(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
+
+    def getLogs(self):
+        with self.lock:
+            return self._log
+
+    def setLogs(self, values):
+        with self.lock:
+            self._log = values
+
+    def writeLog(self, event='None'):
+        with self.lock:
+            self._log.append([self._userName, time.ctime(self._timeStart), \
+                time.ctime(self._timeEnd), event])
 
 class Indicator():
     """Used for concurrent control of signaling indicators such as buzzers,
@@ -208,6 +242,7 @@ class Indicator():
     def __init__(self, pins):
         self.count = 0
         self.continuous = False
+        self.invert = False
         self.delay = 1
 
         self.enabled = False
@@ -223,10 +258,10 @@ class Indicator():
             self.enabled = not self.enabled
         self.writePins(self.enabled)
 
-    def pulse(self, count = 0, continuous = False, delay = 1):
+    def pulse(self, count = 0, continuous = False, invert = False, delay = 1):
         with self.lock:
             self.count, self.continuous = count, continuous
-            self.delay = delay
+            self.delay, self.invert = delay, invert
             self.lock.notify()
 
     def setEnable(self, state = False):
@@ -253,7 +288,7 @@ class Indicator():
             self.lock.acquire()
             if self.continuous or self.count:
                 self.toggle()
-                if self.count and not self.enabled:
+                if self.count and not (self.invert ^ self.enabled):
                     self.count -= 1
                 # Wait for pulse timeout, or wakeup
                 self.lock.wait(self.delay)
@@ -274,6 +309,7 @@ class LED(Indicator):
         elif color == 'green':
             self._pins['red']['state'] = False
             self._pins['green']['state'] = True
+        self.writePins(self.enabled)
 
 def main():
     # Setup hardware
@@ -296,19 +332,20 @@ def main():
     led.setColor('red')
     led.on()
 
-    ssDaemon = threading.Thread(target=spreadsheetWorker, args=(config,))
+    ssDaemon = threading.Thread(target=spreadsheetWorker, args=(config,session,))
     ssDaemon.setDaemon(True)
     ssDaemon.start()
+
+    disp.showMessage("Waiting for spreadsheet update.")
+    disp.update()
+    sleep(10)
 
     try:
         thisMachine = config.getDict()['machine'][MYMAC]['name']
     except KeyError:
         disp.showMessage('Unknown machine MAC.')
+        led.setColor('yellow')
         raise
-
-    disp.showMessage("'" + thisMachine + "' waiting for spreadsheet update.")
-    disp.update()
-    sleep(10)
 
     while(True):
         # Check if a card has been swiped
@@ -323,11 +360,14 @@ def main():
                 print "Access level:", level
             except:
                 disp.showMessage('Unknown ID.')
+                buzzer.pulse(count = 3, delay = 0.1)
                 continue
 
             # Determine state change
             if state == 'estop':
                 disp.showMessage("Estop is depressed!")
+                led.pulse(count = 3, delay = 0.5, invert = True)
+                buzzer.pulse(count = 3, delay = 0.1)
             elif level < 10:
                 disp.showMessage('Sorry, you need to be trained to use this machine.')
                 buzzer.pulse(count = 3, delay = 0.1)
@@ -338,14 +378,13 @@ def main():
                     print "Welcome", session.getUserName()
                     state = 'unlocked'
                     led.setColor('green')
-                    led.on()
                     disp.setState(state)
                     setMachineEnable(True)
                     buzzer.pulse(count = 2, delay = 0.1)
 
                 elif state == 'unlocked':
                     # Extend session
-                    session.new(idhash)
+                    session.extend()
                     disp.showMessage("Extending session.")
                     buzzer.pulse(count = 2, delay = 0.1)
 
@@ -355,8 +394,8 @@ def main():
                 # Estop pressed, lock machine
                 disp.showMessage("EStop, Locking machine!")
                 state = 'estop'
+                session.writeLog(event = "estop")
                 led.setColor('red')
-                led.on()
                 disp.setState(state)
                 setMachineEnable(False)
         else:
@@ -365,7 +404,6 @@ def main():
                 # Estop released, set to locked state
                 state = 'locked'
                 led.setColor('red')
-                led.on()
                 disp.setState(state)
                 setMachineEnable(False)
             elif state == 'unlocked':
@@ -373,8 +411,8 @@ def main():
                     # Session timeout exceeded, lock machine
                     disp.showMessage("Timeout, Locking machine!")
                     state = 'locked'
+                    session.writeLog(event = "timeout")
                     led.setColor('red')
-                    led.on()
                     disp.setState(state)
                     setMachineEnable(False)
 
