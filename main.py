@@ -234,7 +234,7 @@ class UseSession():
     def writeLog(self, event='None'):
         with self.lock:
             self._log.append([self._userName, time.ctime(self._timeStart), \
-                time.ctime(self._timeEnd), event])
+                time.ctime(time.time()), event])
 
 class Indicator():
     """Used for concurrent control of signaling indicators such as buzzers,
@@ -354,8 +354,8 @@ def main():
 
             # Validate ID
             try:
-                id = re.search('[0-9]+',raw).group(0)
-                idhash = hashlib.sha256(id).hexdigest()
+                uid = re.search('[0-9]+',raw).group(0)
+                idhash = hashlib.sha256(uid).hexdigest()
                 level = int(config.getDict()['user'][idhash][thisMachine])
                 print "Access level:", level
             except:
