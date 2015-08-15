@@ -202,6 +202,7 @@ class UseSession():
         self._userName = ''
         self._timeStart = 0
         self._timeEnd = 0
+        self._active = False
 
         self._log = []
         self.lock = threading.RLock()
@@ -212,6 +213,9 @@ class UseSession():
     def getTimeStart(self):
         return self._timeStart
 
+    def getTimeRemain(self):
+        return self._timeEnd - time.time()
+
     def getUserName(self):
         return self._userName
 
@@ -219,9 +223,10 @@ class UseSession():
         self._userName = self._config.getDict()['user'][hash]['name']
         self._timeStart = time.time()
         self._timeEnd = self._timeStart + (int(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
+        self._active = True
 
     def extend(self):
-        self._timeEnd = self._timeStart + (int(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
+        self._timeEnd = time.time() + (int(self._config.getDict()['machine'][MYMAC]['timeout']) * 60)
 
     def getLogs(self):
         with self.lock:
@@ -230,6 +235,11 @@ class UseSession():
     def setLogs(self, values):
         with self.lock:
             self._log = values
+
+    def end(self, event):
+        if self._active:
+            self.writeLog(event)
+            self._active = False
 
     def writeLog(self, event='None'):
         with self.lock:
@@ -311,6 +321,11 @@ class LED(Indicator):
             self._pins['green']['state'] = True
         self.writePins(self.enabled)
 
+    def on(self, color = None):
+        self.setEnable(True)
+        if color != None:
+            self.setColor(color)
+
 def main():
     # Setup hardware
     try:
@@ -320,6 +335,7 @@ def main():
         raise
 
     state = 'locked'
+    timeoutWarning = False
 
     config = Configuration()
     session = UseSession(config)
@@ -329,8 +345,7 @@ def main():
 
     buzzer = Indicator({'buzzer':{'pin':BUZZER_CHANNEL,'state':True}})
     led = LED({'red':{'pin':LED_CHANNEL_RED,'state':True},'green':{'pin':LED_CHANNEL_GREEN,'state':False}})
-    led.setColor('red')
-    led.on()
+    led.on(color = 'red')
 
     ssDaemon = threading.Thread(target=spreadsheetWorker, args=(config,session,))
     ssDaemon.setDaemon(True)
@@ -377,16 +392,18 @@ def main():
                     session.new(idhash)
                     print "Welcome", session.getUserName()
                     state = 'unlocked'
-                    led.setColor('green')
+                    led.on(color = 'green')
                     disp.setState(state)
                     setMachineEnable(True)
                     buzzer.pulse(count = 2, delay = 0.1)
-
+                    timeoutWarning = False
                 elif state == 'unlocked':
                     # Extend session
                     session.extend()
                     disp.showMessage("Extending session.")
+                    led.on(color = 'green')
                     buzzer.pulse(count = 2, delay = 0.1)
+                    timeoutWarning = False
 
         if not GPIO.input(ESTOP_CHANNEL): # Shorted pull-up
             # Estop is depressed!
@@ -394,8 +411,8 @@ def main():
                 # Estop pressed, lock machine
                 disp.showMessage("EStop, Locking machine!")
                 state = 'estop'
-                session.writeLog(event = "estop")
-                led.setColor('red')
+                session.end("estop")
+                led.on(color = 'red')
                 disp.setState(state)
                 setMachineEnable(False)
         else:
@@ -404,18 +421,25 @@ def main():
                 # Estop released, set to locked state
                 state = 'locked'
                 led.setColor('red')
+                led.on()
                 disp.setState(state)
                 setMachineEnable(False)
             elif state == 'unlocked':
-                if time.time() >= session.getTimeEnd():
+                if session.getTimeRemain() <= 0:
                     # Session timeout exceeded, lock machine
                     disp.showMessage("Timeout, Locking machine!")
                     state = 'locked'
-                    session.writeLog(event = "timeout")
-                    led.setColor('red')
+                    session.end("timeout")
+                    led.on(color = 'red')
                     disp.setState(state)
                     setMachineEnable(False)
-
+                if session.getTimeRemain() <= 600 and not timeoutWarning:
+                    # Session ending soon, warn user
+                    disp.showMessage("Session expiring soon, extend session!", duration = 10)
+                    led.setColor('yellow')
+                    led.pulse(continuous = True)
+                    buzzer.pulse(count = 5)
+                    timeoutWarning = True
         disp.update()
         sleep(1)
 
