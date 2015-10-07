@@ -29,14 +29,24 @@ import RPi.GPIO as GPIO
 with open('/sys/class/net/wlan0/address') as f:
     MYMAC = f.read()[:17]
 
-ESTOP_CHANNEL = 17 # Estop on model B+ GPIO 17 (pin 11)
-RELAY_CHANNEL = 4 # Relay on model B+ GPIO 4 (pin 7)
-BUZZER_CHANNEL = 27 # Buzzer on model B+ GPIO 27 (pin 13)
-LED_CHANNEL_RED = 22 # Red LED on model B+ GPIO 22 (pin 15)
-LED_CHANNEL_GREEN = 23 # Green LED on model B+ GPIO 22 (pin 16)
+ESTOP_CHANNEL		= 17 # Estop on model B+ GPIO 17 (pin 11)
+RELAY_CHANNE		= 4  # Relay on model B+ GPIO 4 (pin 7)
+BUZZER_CHANNEL		= 27 # Buzzer on model B+ GPIO 27 (pin 13)
+LED_CHANNEL_RED 	= 22 # Red LED on model B+ GPIO 22 (pin 15)
+LED_CHANNEL_GREEN	= 23 # Green LED on model B+ GPIO 22 (pin 16)
+
+class states():
+	"""
+	Enumerated operating states
+	"""
+	locked		= 0
+	unlocked	= 1
+	estop		= 2
 
 def setMachineEnable(state = False):
-    """Open and close the e-stop relay"""
+    """
+	Open and close the e-stop relay
+	"""
     ### !!!BEWARE, RELAY MODULE IS ACTIVE LOW!!!
     if state:
         GPIO.output(RELAY_CHANNEL, GPIO.LOW) # closes relay
@@ -45,6 +55,9 @@ def setMachineEnable(state = False):
     print 'Machine enabled?:', state
 
 def initHardware():
+	"""
+	Setup raspi GPIO
+	"""
     GPIO.setmode(GPIO.BCM)
     # Estop input active low (pull-up)
     GPIO.setup(ESTOP_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -58,7 +71,9 @@ def initHardware():
     GPIO.setup(LED_CHANNEL_GREEN, GPIO.OUT, initial=GPIO.LOW)
 
 def spreadsheetWorker(config, session):
-    """Thread periodically updating the local config file from google sheets"""
+    """
+	Thread periodically updating the local config file from google sheets
+	"""
     # These credentials can be obtained for your account at the google developer console
     with open('googleCredentials.json','r') as f:
         json_key = json.load(f)
@@ -105,7 +120,9 @@ def spreadsheetWorker(config, session):
         sleep(600)
 
 class Configuration():
-    """Takes care of all handling config storage and access"""
+    """
+	Takes care of all handling config storage and access
+	"""
     def __init__(self):
         with open('config.json','r') as f:
             self._configFile = json.load(f)
@@ -140,7 +157,9 @@ class Configuration():
         return config
 
 class Display():
-    """Handles what gets displayed on the LCD"""
+    """
+	Handles what gets displayed on the LCD
+	"""
     def __init__(self, session):
         self._session = session
 
@@ -148,7 +167,7 @@ class Display():
         self._lcd = lcddriver.lcd()
         self._lcd.lcd_clear()
 
-        self._state = 'locked'
+        self._state = states.locked
 
         self._timestr = ''
         self._messageTimeout = 0
@@ -157,30 +176,31 @@ class Display():
     def setState(self, state):
         self._state = state
 
-        if self._state == 'locked':
+        if self._state == states.locked:
             self._lcd.lines = \
                 ["*******LOCKED*******",
                 "  Ready to swipe.   ",
                 "",
                 time.ctime()[:20]]
-        elif self._state == 'estop':
+        elif self._state == states.estop:
             self._lcd.lines = \
                 ["*******LOCKED*******",
-                "E-Stop is depressed.",
+                "E-Stop is depressed!",
                 "",
                 time.ctime()[:20]]
-        elif self._state == 'unlocked':
+        elif self._state == states.unlocked:
             expires = self._session.getTimeEnd()
             remaining = time.strftime('%H:%M:%S', time.gmtime(expires - time.time()))
             self._lcd.lines = \
                 ["  MACHINE UNLOCKED  ",
                 self._session.getUserName(),
                 "Unlocked:  " + time.ctime(self._session.getTimeStart())[11:19] ,
-                #"Remaining: " + time.ctime(self._session.getTimeEnd())[11:16] ]
                 "Remaining: " + remaining ]
 
     def showMessage(self, message, duration = 3):
-        """Show a message string for duration seconds"""
+        """
+		Show a message string for duration seconds
+		"""
         print message
         self._lcd.lines = ['','','','']
         msgLines = re.findall('.{0,19}[ |.|!|?]',message)[:3]
@@ -196,6 +216,9 @@ class Display():
         self._lcd.writeLines()
 
 class UseSession():
+	"""
+	Handle session reading and writing
+	"""
     def __init__(self, config):
         self._config = config
 
@@ -246,9 +269,11 @@ class UseSession():
             self._log.append([self._userName, time.ctime(self._timeStart), \
                 time.ctime(time.time()), event])
 
-class Indicator():
-    """Used for concurrent control of signaling indicators such as buzzers,
-    lights, etc"""
+class Indicator(object):
+    """
+	Used for concurrent control of signaling indicators such as buzzers,
+    lights, etc
+	"""
     def __init__(self, pins):
         self.count = 0
         self.continuous = False
@@ -334,7 +359,7 @@ def main():
         print "Unable to setup GPIO. Need sudo?"
         raise
 
-    state = 'locked'
+    state = states.locked
     timeoutWarning = False
 
     config = Configuration()
@@ -362,7 +387,7 @@ def main():
         led.setColor('yellow')
         raise
 
-    while(True):
+    while True:
         # Check if a card has been swiped
         if select.select([sys.stdin,],[],[],0.0)[0]:
             raw = sys.stdin.readline()
@@ -379,7 +404,7 @@ def main():
                 continue
 
             # Determine state change
-            if state == 'estop':
+            if state == states.estop:
                 disp.showMessage("Estop is depressed!")
                 led.pulse(count = 3, delay = 0.5, invert = True)
                 buzzer.pulse(count = 3, delay = 0.1)
@@ -387,17 +412,17 @@ def main():
                 disp.showMessage('Sorry, you need to be trained to use this machine.')
                 buzzer.pulse(count = 3, delay = 0.1)
             else:
-                if state == 'locked':
+                if state == states.locked:
                     # Unlock the machine
                     session.new(idhash)
                     print "Welcome", session.getUserName()
-                    state = 'unlocked'
+                    state = states.unlocked
                     led.on(color = 'green')
                     disp.setState(state)
                     setMachineEnable(True)
                     buzzer.pulse(count = 2, delay = 0.1)
                     timeoutWarning = False
-                elif state == 'unlocked':
+                elif state == states.unlocked:
                     # Extend session
                     session.extend()
                     disp.showMessage("Extending session.")
@@ -407,28 +432,28 @@ def main():
 
         if not GPIO.input(ESTOP_CHANNEL): # Shorted pull-up
             # Estop is depressed!
-            if state != 'estop':
+            if state != states.estop:
                 # Estop pressed, lock machine
                 disp.showMessage("EStop, Locking machine!")
-                state = 'estop'
+                state = states.estop
                 session.end("estop")
                 led.on(color = 'red')
                 disp.setState(state)
                 setMachineEnable(False)
         else:
             # Normal operation
-            if state == 'estop':
+            if state == states.estop:
                 # Estop released, set to locked state
-                state = 'locked'
+                state = states.locked
                 led.setColor('red')
                 led.on()
                 disp.setState(state)
                 setMachineEnable(False)
-            elif state == 'unlocked':
+            elif state == states.unlocked:
                 if session.getTimeRemain() <= 0:
                     # Session timeout exceeded, lock machine
                     disp.showMessage("Timeout, Locking machine!")
-                    state = 'locked'
+                    state = states.locked
                     session.end("timeout")
                     led.on(color = 'red')
                     disp.setState(state)
