@@ -9,13 +9,16 @@
 ### Machine Lockout controller
 ### Jascha Wilcox 2015
 
+# Built-in
 import time
 from time import sleep
+
 import sys, select, threading
 import hashlib
 import re
 import copy
-import json
+import json, csv
+import logging
 
 # Google sheets
 import gspread
@@ -29,24 +32,25 @@ import RPi.GPIO as GPIO
 with open('/sys/class/net/wlan0/address') as f:
     MYMAC = f.read()[:17]
 
-ESTOP_CHANNEL		= 17 # Estop on model B+ GPIO 17 (pin 11)
-RELAY_CHANNE		= 4  # Relay on model B+ GPIO 4 (pin 7)
-BUZZER_CHANNEL		= 27 # Buzzer on model B+ GPIO 27 (pin 13)
-LED_CHANNEL_RED 	= 22 # Red LED on model B+ GPIO 22 (pin 15)
-LED_CHANNEL_GREEN	= 23 # Green LED on model B+ GPIO 22 (pin 16)
+# Globals
+ESTOP_CHANNEL       = 17 # Estop on model B+ GPIO 17 (pin 11)
+RELAY_CHANNE        = 4  # Relay on model B+ GPIO 4 (pin 7)
+BUZZER_CHANNEL      = 27 # Buzzer on model B+ GPIO 27 (pin 13)
+LED_CHANNEL_RED     = 22 # Red LED on model B+ GPIO 22 (pin 15)
+LED_CHANNEL_GREEN   = 23 # Green LED on model B+ GPIO 22 (pin 16)
 
 class states():
-	"""
-	Enumerated operating states
-	"""
-	locked		= 0
-	unlocked	= 1
-	estop		= 2
+    """
+    Enumerated operating states
+    """
+    locked      = 0
+    unlocked    = 1
+    estop       = 2
 
 def setMachineEnable(state = False):
     """
-	Open and close the e-stop relay
-	"""
+    Open and close the e-stop relay
+    """
     ### !!!BEWARE, RELAY MODULE IS ACTIVE LOW!!!
     if state:
         GPIO.output(RELAY_CHANNEL, GPIO.LOW) # closes relay
@@ -55,9 +59,9 @@ def setMachineEnable(state = False):
     print 'Machine enabled?:', state
 
 def initHardware():
-	"""
-	Setup raspi GPIO
-	"""
+    """
+    Setup raspi GPIO
+    """
     GPIO.setmode(GPIO.BCM)
     # Estop input active low (pull-up)
     GPIO.setup(ESTOP_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -72,8 +76,8 @@ def initHardware():
 
 def spreadsheetWorker(config, session):
     """
-	Thread periodically updating the local config file from google sheets
-	"""
+    Thread periodically updating the local config file from google sheets
+    """
     # These credentials can be obtained for your account at the google developer console
     with open('googleCredentials.json','r') as f:
         json_key = json.load(f)
@@ -119,10 +123,10 @@ def spreadsheetWorker(config, session):
         # Update every so often
         sleep(600)
 
-class Configuration():
+class Configuration(object):
     """
-	Takes care of all handling config storage and access
-	"""
+    Takes care of all handling config storage and access
+    """
     def __init__(self):
         with open('config.json','r') as f:
             self._configFile = json.load(f)
@@ -156,10 +160,10 @@ class Configuration():
 
         return config
 
-class Display():
+class Display(object):
     """
-	Handles what gets displayed on the LCD
-	"""
+    Handles what gets displayed on the LCD
+    """
     def __init__(self, session):
         self._session = session
 
@@ -199,8 +203,8 @@ class Display():
 
     def showMessage(self, message, duration = 3):
         """
-		Show a message string for duration seconds
-		"""
+        Show a message string for duration seconds
+        """
         print message
         self._lcd.lines = ['','','','']
         msgLines = re.findall('.{0,19}[ |.|!|?]',message)[:3]
@@ -215,10 +219,10 @@ class Display():
             self.setState(self._state)
         self._lcd.writeLines()
 
-class UseSession():
-	"""
-	Handle session reading and writing
-	"""
+class UseSession(object):
+    """
+    Handle session reading and writing
+    """
     def __init__(self, config):
         self._config = config
 
@@ -268,12 +272,16 @@ class UseSession():
         with self.lock:
             self._log.append([self._userName, time.ctime(self._timeStart), \
                 time.ctime(time.time()), event])
+            
+            with open('sessionlog.csv', 'wb') as sLog:
+                sLogWriter = csv.writer(sLog)
+                sLogWriter.writerow(self._log[-1])
 
 class Indicator(object):
     """
-	Used for concurrent control of signaling indicators such as buzzers,
+    Used for concurrent control of signaling indicators such as buzzers,
     lights, etc
-	"""
+    """
     def __init__(self, pins):
         self.count = 0
         self.continuous = False
@@ -351,6 +359,34 @@ class LED(Indicator):
         if color != None:
             self.setColor(color)
 
+class Machine(object):
+    def __init__(self):
+        self._state = states.locked
+        
+    def updateState(self, newState):
+        if self._state == states.unlocked:
+            if newState == states.locked:
+                pass
+            elif newState == states.estop:
+                pass
+            else:
+                pass
+        elif self._state == states.locked:
+            if newState == states.unlocked:
+                pass
+            elif newState == states.estop:
+                pass
+            else:
+                pass
+        elif self._state == states.estop:
+            if newState == states.locked:
+                pass
+            elif newState == states.estop:
+                pass
+            else:
+                pass
+        self._state = newState
+
 def main():
     # Setup hardware
     try:
@@ -359,17 +395,17 @@ def main():
         print "Unable to setup GPIO. Need sudo?"
         raise
 
-    state = states.locked
+    state   = states.locked
     timeoutWarning = False
 
-    config = Configuration()
+    config  = Configuration()
     session = UseSession(config)
 
-    disp = Display(session)
+    disp    = Display(session)
     disp.setState(state)
 
-    buzzer = Indicator({'buzzer':{'pin':BUZZER_CHANNEL,'state':True}})
-    led = LED({'red':{'pin':LED_CHANNEL_RED,'state':True},'green':{'pin':LED_CHANNEL_GREEN,'state':False}})
+    buzzer  = Indicator({'buzzer':{'pin':BUZZER_CHANNEL,'state':True}})
+    led     = LED({'red':{'pin':LED_CHANNEL_RED,'state':True},'green':{'pin':LED_CHANNEL_GREEN,'state':False}})
     led.on(color = 'red')
 
     ssDaemon = threading.Thread(target=spreadsheetWorker, args=(config,session,))
