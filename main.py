@@ -181,25 +181,25 @@ class Display(object):
         self._state = state
 
         if self._state == states.locked:
-            self._lcd.lines = \
+            self._lcd.setLines(\
                 ["*******LOCKED*******",
                 "  Ready to swipe.   ",
                 "",
-                time.ctime()[:20]]
+                time.ctime()[:20]])
         elif self._state == states.estop:
-            self._lcd.lines = \
+            self._lcd.setLines(\
                 ["*******LOCKED*******",
                 "E-Stop is depressed!",
                 "",
-                time.ctime()[:20]]
+                time.ctime()[:20]])
         elif self._state == states.unlocked:
             expires = self._session.getTimeEnd()
             remaining = time.strftime('%H:%M:%S', time.gmtime(expires - time.time()))
-            self._lcd.lines = \
+            self._lcd.setLines(\
                 ["  MACHINE UNLOCKED  ",
                 self._session.getUserName(),
                 "Unlocked:  " + time.ctime(self._session.getTimeStart())[11:19] ,
-                "Remaining: " + remaining ]
+                "Remaining: " + remaining ])
 
     def showMessage(self, message, duration = 3):
         """
@@ -217,7 +217,7 @@ class Display(object):
     def update(self):
         if time.time() >= self._messageTimeout:
             self.setState(self._state)
-        self._lcd.writeLines()
+        self._lcd.update()
 
 class UseSession(object):
     """
